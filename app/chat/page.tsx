@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ArrowUp } from "lucide-react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
+import { useTelemetry } from "../hooks/useTelemetry";
 
 const INITIAL_MESSAGE = "oh hey. i've got your context loaded. what's on your mind right now?";
 
@@ -23,11 +24,16 @@ function randomPhrase() {
 }
 
 export default function ChatPage() {
-  const [userContext, setUserContext] = useState<Record<string, string>>({});
-  const contextRef = useRef<Record<string, string>>({});
+  const [userContext, setUserContext] = useState<Record<string, unknown>>({});
+  const contextRef = useRef<Record<string, unknown>>({});
+  const telemetryRef = useRef<any>(null);
   const [inputValue, setInputValue]   = useState("");
   const [loadingPhrase, setLoadingPhrase] = useState(LOADING_PHRASES[0]);
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [isContextLoaded, setIsContextLoaded] = useState(false);
+  const hasCheckedInterceptRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { handleKeyPress, getAndResetTelemetry } = useTelemetry();
 
   // Load context from localStorage after mount (avoids hydration mismatch)
   useEffect(() => {
@@ -38,6 +44,8 @@ export default function ChatPage() {
       contextRef.current = parsed;
     } catch {
       setUserContext({});
+    } finally {
+      setIsContextLoaded(true);
     }
   }, []);
 
@@ -52,7 +60,7 @@ export default function ChatPage() {
         api: "/api/chat",
         // inject the latest userContext into every request via the ref
         prepareSendMessagesRequest: ({ messages }) => ({
-          body: { messages, context: contextRef.current },
+          body: { messages, context: contextRef.current, telemetry: telemetryRef.current },
         }),
       }),
     // transport created once; contextRef.current is read at send-time
@@ -60,7 +68,7 @@ export default function ChatPage() {
     []
   );
 
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, sendMessage, status, error, append } = useChat({
     transport,
     onError: (err) => console.error("[loomi/chat] useChat error:", err),
   });
@@ -85,10 +93,98 @@ export default function ChatPage() {
     return (textPart as { type: "text"; text: string } | undefined)?.text ?? INITIAL_MESSAGE;
   }, [messages]);
 
+  useEffect(() => {
+    if (!isContextLoaded || hasCheckedInterceptRef.current) return;
+    hasCheckedInterceptRef.current = true;
+
+    const lastActiveValue = Number(userContext.lastActive);
+    if (!Number.isFinite(lastActiveValue)) return;
+
+    const timeSinceActive = Date.now() - lastActiveValue;
+    const thresholdMs = 4 * 60 * 60 * 1000;
+    const hasGoals = Array.isArray(userContext.actionableGoals) && userContext.actionableGoals.length > 0;
+
+    if (timeSinceActive > thresholdMs && hasGoals) {
+      append({ role: "user", content: "[SYSTEM_EVENT: PROACTIVE_PING]" });
+    }
+  }, [isContextLoaded, userContext, append]);
+
+  const updateLastActive = () => {
+    const updatedContext = { ...contextRef.current, lastActive: Date.now() };
+    localStorage.setItem("loomi_context", JSON.stringify(updatedContext));
+    contextRef.current = updatedContext;
+    setUserContext(updatedContext);
+  };
+
+  const mergeStringArrays = (existing: unknown, incoming: unknown) => {
+    const base = Array.isArray(existing) ? existing : [];
+    const add = Array.isArray(incoming) ? incoming : [];
+    const combined = [...base, ...add]
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+    return Array.from(new Set(combined));
+  };
+
+  const handleEndSession = async () => {
+    updateLastActive();
+    if (messages.length === 0 || isSummarizing) return;
+    setIsSummarizing(true);
+    try {
+      const response = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages }),
+      });
+
+      if (!response.ok) throw new Error(`summarize failed: ${response.status}`);
+
+      const summary = (await response.json()) as {
+        identityStakes?: string[];
+        actionableGoals?: string[];
+        domainTags?: string[];
+      };
+
+      let existingContext: Record<string, unknown> = {};
+      try {
+        const raw = localStorage.getItem("loomi_context");
+        existingContext = raw ? JSON.parse(raw) : {};
+      } catch {
+        existingContext = {};
+      }
+
+      const updatedContext = {
+        ...existingContext,
+        identityStakes: mergeStringArrays(
+          existingContext["identityStakes"],
+          summary.identityStakes
+        ),
+        actionableGoals: mergeStringArrays(
+          existingContext["actionableGoals"],
+          summary.actionableGoals
+        ),
+        domainTags: mergeStringArrays(
+          existingContext["domainTags"],
+          summary.domainTags
+        ),
+      };
+
+      localStorage.setItem("loomi_context", JSON.stringify(updatedContext));
+      setIsSummarizing(false);
+      window.location.reload();
+      return;
+    } catch (err) {
+      console.error("[loomi/chat] summarize error:", err);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
   const handleSend = async () => {
+    updateLastActive();
     const text = (inputValue ?? "").trim();
     if (!text || isLoading) return;
     setInputValue("");
+    telemetryRef.current = getAndResetTelemetry();
     await sendMessage({ text });
     setTimeout(() => inputRef.current?.focus(), 50);
   };
@@ -99,6 +195,7 @@ export default function ChatPage() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    handleKeyPress(e);
     if (e.key === "Enter") handleSend();
   };
 
@@ -112,6 +209,18 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6 relative">
+
+      <div className="absolute top-6 right-6">
+        <button
+          type="button"
+          onClick={handleEndSession}
+          disabled={isSummarizing || messages.length === 0}
+          className="text-xs text-gray-400 hover:text-gray-900 transition-colors disabled:opacity-50 disabled:hover:text-gray-400"
+          aria-label="end session"
+        >
+          {isSummarizing ? "vaulting..." : "end session"}
+        </button>
+      </div>
 
       {/* ── Centerpiece ── */}
       <div className="flex flex-col items-center">

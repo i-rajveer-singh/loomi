@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Loomi
 
-## Getting Started
+Loomi is a warm, witty AI wellness and growth companion. It blends a coaching voice with empathetic reflection, then stores insights locally so users can revisit their growth arc.
 
-First, run the development server:
+## What it does
+
+- Onboards users with a gentle intake flow to capture goals and context.
+- Runs a real-time chat experience powered by Google Gemini via the AI SDK.
+- Summarizes sessions into identity stakes, domain tags, and micro-goals.
+- Visualizes saved context in the mind canvas.
+- Stores all user context in local storage by design.
+
+## Core flows
+
+1. Landing page -> onboarding -> chat
+2. End session -> summarize -> merge into local context
+3. Mind canvas -> shows identity stakes, domains, and actionable goals
+
+## Tech stack
+
+- Next.js App Router (React 19)
+- AI SDK + Gemini 2.5 Flash
+- Tailwind CSS v4
+- Framer Motion
+
+## Project structure
+
+- [app/page.tsx](app/page.tsx) landing page
+- [app/onboarding/page.tsx](app/onboarding/page.tsx) onboarding wizard
+- [app/chat/page.tsx](app/chat/page.tsx) chat UI and session flow
+- [app/canvas/page.tsx](app/canvas/page.tsx) mind canvas view
+- [app/api/chat/route.ts](app/api/chat/route.ts) chat streaming endpoint
+- [app/api/summarize/route.ts](app/api/summarize/route.ts) session summarizer
+- [app/components/NavBar.tsx](app/components/NavBar.tsx) top navigation
+- [app/hooks/useTelemetry.ts](app/hooks/useTelemetry.ts) typing telemetry capture
+- [app/utils/cognitiveState.ts](app/utils/cognitiveState.ts) receptivity heuristic
+
+## Local data and privacy
+
+Loomi stores user context in local storage under the key `loomi_context`. Nothing is persisted on a server. Use the "end session" action in the chat to run the summarizer and merge new insights into that local context, then check the mind canvas.
+
+## Environment variables
+
+Create [\.env.local](.env.local) with:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+GOOGLE_GENERATIVE_AI_API_KEY=your_key_here
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Do not commit secrets to Git. The default gitignore already excludes env files.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Running locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+```
 
-## Learn More
+Open http://localhost:3000.
 
-To learn more about Next.js, take a look at the following resources:
+## Scripts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `npm run dev` start the dev server
+- `npm run build` build for production
+- `npm run start` run the production server
+- `npm run lint` lint
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Contributing
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Keep the tone guidelines in [app/api/chat/route.ts](app/api/chat/route.ts) aligned with the product voice.
+- Prefer small, testable UI changes in isolated components.
+- If you add new context fields, update onboarding, chat payloads, and the mind canvas together.
